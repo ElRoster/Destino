@@ -1,0 +1,355 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  CLIENT
+  TAROT_READER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+  CHAT
+}
+
+enum CallStatus {
+  INITIATED
+  CONNECTED
+  DISCONNECTED
+  FAILED
+  COMPLETED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  CONSUMPTION
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum ReaderAvailability {
+  ONLINE
+  BUSY
+  OFFLINE
+}
+
+model User {
+  id               String       @id @default(uuid()) @db.Uuid
+  email            String       @unique
+  passwordHash     String
+  refreshTokenHash String?
+  firstName        String
+  lastName         String
+  birthDate        DateTime?
+  phone            String?
+  role             UserRole     @default(CLIENT)
+  status           UserStatus   @default(ACTIVE)
+  profileImage     String?
+  isEmailVerified  Boolean      @default(false)
+  emailVerifiedAt  DateTime?
+  emailVerificationTokenHash String?
+  emailVerificationTokenExpiresAt DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+
+  wallet           Wallet?
+  tarotReader      TarotReader?
+  callsInitiated   Call[]       @relation("ClientCalls")
+  ratingsGiven     Rating[]
+  sessions         Session[]
+  auditLogs        AuditTrail[]
+  notifications    Notification[]
+  paymentMethods   PaymentMethod[]
+  supportTickets   SupportTicket[]
+  ticketMessages   TicketMessage[]
+  promotionUsages  PromotionUsage[]
+  preference       UserPreference?
+  feedback         Feedback[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model TarotReader {
+  id            String             @id @default(uuid()) @db.Uuid
+  userId        String             @unique @db.Uuid
+  displayName   String
+  bio           String             @db.Text
+  profileImage  String?
+  ratePerMinute Decimal            @default(0.00) @db.Decimal(10, 2)
+  availability  ReaderAvailability @default(OFFLINE)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  deletedAt     DateTime?
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  callsReceived Call[]             @relation("ReaderCalls")
+  ratings       Rating[]
+
+  @@index([availability])
+}
+
+model Wallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  balance   Decimal  @default(0.00) @db.Decimal(12, 2)
+  version   Int      @default(0) // Optimistic locking
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+  consumptions TokenConsumption[]
+}
+
+model WalletTransaction {
+  id          String            @id @default(uuid()) @db.Uuid
+  walletId    String            @db.Uuid
+  type        TransactionType
+  amount      Decimal           @db.Decimal(12, 2)
+  status      TransactionStatus @default(PENDING)
+  referenceId String?           @db.Uuid // Call UUID, Payment UUID, etc.
+  description String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  wallet      Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([type])
+  @@index([status])
+}
+
+model Call {
+  id             String     @id @default(uuid()) @db.Uuid
+  clientId       String     @db.Uuid
+  readerId       String     @db.Uuid
+  type           CallType
+  status         CallStatus @default(INITIATED)
+  ratePerMinute  Decimal    @db.Decimal(10, 2)
+  totalCharged   Decimal    @default(0.00) @db.Decimal(12, 2)
+  socketRoomId   String?
+  startTime      DateTime?
+  endTime        DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  client         User        @relation("ClientCalls", fields: [clientId], references: [id], onDelete: Restrict)
+  reader         TarotReader @relation("ReaderCalls", fields: [readerId], references: [id], onDelete: Restrict)
+  consumptions   TokenConsumption[]
+
+  @@index([clientId])
+  @@index([readerId])
+  @@index([status])
+}
+
+model TokenConsumption {
+  id         String   @id @default(uuid()) @db.Uuid
+  callId     String   @db.Uuid
+  walletId   String   @db.Uuid
+  minuteTick Int      // Which minute of the call this consumption represents
+  amount     Decimal  @db.Decimal(10, 2)
+  timestamp  DateTime @default(now())
+
+  call       Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  wallet     Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, minuteTick])
+  @@index([callId])
+  @@index([walletId])
+}
+
+model Rating {
+  id            String      @id @default(uuid()) @db.Uuid
+  clientId      String      @db.Uuid
+  readerId      String      @db.Uuid
+  score         Int         // 1 to 5
+  reviewText    String?     @db.Text
+  createdAt     DateTime    @default(now())
+
+  client        User        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  reader        TarotReader @relation(fields: [readerId], references: [id], onDelete: Cascade)
+
+  @@index([readerId])
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  deviceFinger String?
+  ipAddress    String?
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  title     String
+  message   String   @db.Text
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model AuditTrail {
+  id        String   @id @default(uuid()) @db.Uuid
+  action    String   // e.g. "USER_LOGIN", "WALLET_DEPOSIT", "CALL_STARTED", "BALANCE_DEDUCTION"
+  actorId   String?  @db.Uuid
+  ipAddress String?
+  metadata  Json?    // Stores detailed parameters of the action
+  createdAt DateTime @default(now())
+
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([actorId])
+}
+
+// Payment methods for storing user's payment options
+model PaymentMethod {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  type          String   // "CARD", "BANK_TRANSFER", "DIGITAL_WALLET"
+  lastFour      String   // Last 4 digits for cards
+  expiryMonth   Int?
+  expiryYear    Int?
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Support tickets for customer service
+model SupportTicket {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  subject       String
+  description   String   @db.Text
+  status        String   @default("OPEN") // "OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"
+  priority      String   @default("NORMAL") // "LOW", "NORMAL", "HIGH", "URGENT"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  resolvedAt    DateTime?
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      TicketMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Messages within support tickets
+model TicketMessage {
+  id          String   @id @default(uuid()) @db.Uuid
+  ticketId    String   @db.Uuid
+  userId      String   @db.Uuid
+  message     String   @db.Text
+  isFromAdmin Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+// Promotions and discounts
+model Promotion {
+  id            String   @id @default(uuid()) @db.Uuid
+  code          String   @unique
+  description   String
+  discountType  String   // "PERCENTAGE", "FIXED_AMOUNT"
+  discountValue Decimal  @db.Decimal(10, 2)
+  maxUses       Int?     // null = unlimited
+  usedCount     Int      @default(0)
+  isActive      Boolean  @default(true)
+  startDate     DateTime
+  endDate       DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  usages        PromotionUsage[]
+
+  @@index([code])
+  @@index([isActive])
+}
+
+// Track promotion usage per user
+model PromotionUsage {
+  id           String   @id @default(uuid()) @db.Uuid
+  promotionId  String   @db.Uuid
+  userId       String   @db.Uuid
+  usedAt       DateTime @default(now())
+
+  promotion    Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, userId])
+  @@index([userId])
+}
+
+// User preferences and settings
+model UserPreference {
+  id                    String  @id @default(uuid()) @db.Uuid
+  userId                String  @unique @db.Uuid
+  language              String  @default("es")
+  timezone              String  @default("America/Bogota")
+  receiveNotifications  Boolean @default(true)
+  receiveEmails         Boolean @default(true)
+  receiveSMS            Boolean @default(false)
+  theme                 String  @default("light") // "light", "dark"
+  twoFactorEnabled      Boolean @default(false)
+  updatedAt             DateTime @updatedAt
+
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// General feedback from users
+model Feedback {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  rating        Int      // 1-5 stars
+  feedbackType  String   // "BUG_REPORT", "FEATURE_REQUEST", "GENERAL"
+  message       String   @db.Text
+  status        String   @default("NEW") // "NEW", "REVIEWED", "ADDRESSED"
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([feedbackType])
+}
